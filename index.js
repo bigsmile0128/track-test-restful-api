@@ -1,80 +1,94 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const { createClient } = require('@supabase/supabase-js');
+const sqlite3 = require('sqlite3').verbose();
 require('dotenv').config();
 
-// Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Initialize SQLite database
+const db = new sqlite3.Database('./recipes.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+        console.error(err.message);
+    }
+    console.log('Connected to the recipes database.');
+});
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
 
+// Create table if it doesn't exist
+db.run(`CREATE TABLE IF NOT EXISTS recipes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT,
+  making_time TEXT,
+  serves TEXT,
+  ingredients TEXT,
+  cost INTEGER,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)`);
+
 app.post('/recipes', async (req, res) => {
     const { title, making_time, serves, ingredients, cost } = req.body;
-    const { data, error } = await supabase
-        .from('recipes')
-        .insert([{ title, making_time, serves, ingredients, cost }]);
-    if (error) {
-        return res.status(400).json({ message: "Recipe creation failed!", error: error.message });
-    } else {
-      return res.json({ message: "Recipe successfully created!", recipe: data });
-    }
+    const sql = `INSERT INTO recipes (title, making_time, serves, ingredients, cost) VALUES (?, ?, ?, ?, ?)`;
+    db.run(sql, [title, making_time, serves, ingredients, cost], function (err) {
+        if (err) {
+            return res.status(400).json({ message: "Recipe creation failed!", error: err.message });
+        }
+        res.json({ message: "Recipe successfully created!", recipe: { id: this.lastID, ...req.body } });
+    });
 });
 
-app.get('/recipes', async (req, res) => {
-  console.log("this is running")
-    const { data, error } = await supabase
-        .from('recipes')
-        .select('*');
-    if (error) {
-        return res.status(400).json({ error: error.message});
-    } else {
-      return res.json({ recipes: data });
-    }
+app.get('/recipes', (req, res) => {
+    db.all(`SELECT * FROM recipes`, [], (err, rows) => {
+        if (err) {
+            return res.status(400).json({ error: err.message });
+        }
+        res.json({ recipes: rows });
+    });
 });
 
-app.get('/recipes/:id', async (req, res) => {
-    const { data, error } = await supabase
-        .from('recipes')
-        .select('*')
-        .eq('id', req.params.id)
-        .single();
-    if (error) {
-        return res.status(404).json({ message: "No recipe found", error: error.message });
-    } else {
-      res.json({ message: "Recipe details by id", recipe: data });
-    }
+app.get('/recipes/:id', (req, res) => {
+    const sql = `SELECT * FROM recipes WHERE id = ?`;
+    db.get(sql, [req.params.id], (err, row) => {
+        if (err) {
+            return res.status(404).json({ message: "No recipe found", error: err.message });
+        }
+        if (row) {
+            res.json({ message: "Recipe details by id", recipe: row });
+        } else {
+            res.status(404).json({ message: "No recipe found" });
+        }
+    });
 });
 
-app.patch('/recipes/:id', async (req, res) => {
+app.patch('/recipes/:id', (req, res) => {
     const { title, making_time, serves, ingredients, cost } = req.body;
-    const { data, error } = await supabase
-        .from('recipes')
-        .update({ title, making_time, serves, ingredients, cost })
-        .eq('id', req.params.id);
-    if (error) {
-        return res.status(400).json({ message: "Update failed", error: error.message });
-    } else {
-      return res.json({ message: "Recipe successfully updated!", recipe: data });
-    }
+    const sql = `UPDATE recipes SET title = ?, making_time = ?, serves = ?, ingredients = ?, cost = ? WHERE id = ?`;
+    db.run(sql, [title, making_time, serves, ingredients, cost, req.params.id], function (err) {
+        if (err) {
+            return res.status(400).json({ message: "Update failed", error: err.message });
+        }
+        if (this.changes) {
+            res.json({ message: "Recipe successfully updated!" });
+        } else {
+            res.status(404).json({ message: "No recipe found" });
+        }
+    });
 });
 
-app.delete('/recipes/:id', async (req, res) => {
-    const { data, error } = await supabase
-        .from('recipes')
-        .delete()
-        .eq('id', req.params.id)
-        .single();
-
-    if (error) {
-        return res.status(404).json({ message: "No recipe found", error: error.message });
-    } else {
-      return res.json({ message: "Recipe successfully removed!" });
-    }
+app.delete('/recipes/:id', (req, res) => {
+    const sql = `DELETE FROM recipes WHERE id = ?`;
+    db.run(sql, [req.params.id], function (err) {
+        if (err) {
+            return res.status(404).json({ message: "No recipe found", error: err.message });
+        }
+        if (this.changes) {
+            res.json({ message: "Recipe successfully removed!" });
+        } else {
+            res.status(404).json({ message: "No recipe found" });
+        }
+    });
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
